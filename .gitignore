@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 生成物
+assets/output/
+assets/data/
+
+# 临时
+_tmp_*.py
