@@ -39,7 +39,7 @@ chan-structure-analysis/
 
 - Python 3.10+（仅标准库，无第三方依赖）
 - 通达信 MCP（拉取 K 线数据）
-- **echarts.min.js**：因体积（约 1MB）未纳入本仓库，请从 [Apache ECharts 官方 CDN](https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js) 下载后放到 `assets/_shared/js/echarts.min.js`。
+- **echarts.min.js**（Apache ECharts 5，约 1MB）：已随仓库附带，位于 `assets/_shared/js/echarts.min.js`，无需额外下载。
 
 ## 数据格式
 
