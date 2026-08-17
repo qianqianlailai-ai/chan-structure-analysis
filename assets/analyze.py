@@ -98,7 +98,9 @@ def build_charts_js(analyzed, bars):
         if bi_idx >= len(analyzed["bi_ext"]):
             continue
         sigs.append({"type": s["type"], "price": s["price"],
-                     "idx": analyzed["bi_ext"][bi_idx][1], "buy": s["type"].endswith("买")})
+                     "idx": analyzed["bi_ext"][bi_idx][1],
+                     "buy": s["type"].endswith("买"),
+                     "status": s.get("status", "normal")})
         sig_bi.add(bi_idx)
     # 背驰点与买卖点同笔时去重（避免重叠），其余保留
     divs2 = []
@@ -204,8 +206,14 @@ def build_html(analyzed, bars, name, code, period, meta):
     if analyzed["signals"]:
         rows = []
         for s in sorted(analyzed["signals"], key=lambda x: x["bi"]):
-            color = "accent" if s["type"].endswith("买") else "accent2"
-            rows.append(f'<span class="tag" style="background:var({color});color:var(--bg)">{s["type"]}</span>'
+            sig_st = s.get("status", "normal")
+            if sig_st == "broken":
+                color = "muted"; tag = s["type"] + "(失效)"
+            elif sig_st == "resistance":
+                color = "muted"; tag = "减仓"
+            else:
+                color = "accent" if s["type"].endswith("买") else "accent2"; tag = s["type"]
+            rows.append(f'<span class="tag" style="background:var({color});color:var(--bg)">{tag}</span>'
                         f' <strong style="color:var({color})">{s["price"]:.2f}</strong> · 笔{s["bi"]}')
         sig_cards = ('<div class="card" style="border-color:var(--gold)">'
                      '<p><strong style="color:var(--gold)">买卖点</strong>（与图上标注对应）：'

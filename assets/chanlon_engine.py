@@ -180,6 +180,61 @@ def correct_interior_extreme(seq, fractals, bi):
     return bi
 
 
+# ---------------------------------------------------------------- K线极值贴合
+def _bar_to_grp(seq, bar_idx):
+    """把原始 bar 序号映射到其所属合并K线组 seq 下标。"""
+    for g in range(len(seq)):
+        gs = seq[g][2]
+        ge = seq[g + 1][2] - 1 if g + 1 < len(seq) else 10 ** 9
+        if gs <= bar_idx <= ge:
+            return g
+    return len(seq) - 1
+
+
+def fit_extreme_to_kline(bars, seq, bi, tol=0.01):
+    """把笔终点贴合到该笔覆盖 K 线区间内的真实极值。
+
+    问题：分型确认用合并K线值，可能让笔终点落在分型值上，而同一笔区间内
+    某些原始 K 线的真实低/高更极端（如 5.42 之后还有 5.40、5.22 之后还有
+    5.20、5.20 之前还有 5.17），但这些 K 线未形成独立底分型，传统极值矫正
+    抓不到。这里对每笔（含最后一笔）扫描其完整 K 线区间，向更极端贴合，
+    并级联更新下一笔起点，使低点/高点贴合肉眼所见 K 线极值。
+
+    约束：不侵入下一笔（极值不越过下一笔终点组）、极值组距笔起点 >= MIN_GAP。
+    """
+    bi = [list(b) for b in bi]
+    n = len(bi)
+    for i in range(n):
+        s, e, d, sp, ep = bi[i]
+        lo = seq[s][2]                                  # 本笔起点 bar
+        hi = seq[bi[i + 1][1]][2] if i + 1 < n else len(bars) - 1
+        if hi <= lo:
+            continue
+        if d == "down":
+            best = min(range(lo, hi + 1), key=lambda k: bars[k]["l"])
+            val = bars[best]["l"]
+            if val < ep - tol:
+                grp = _bar_to_grp(seq, best)
+                if grp - s >= MIN_GAP and (i + 1 >= n or grp < bi[i + 1][1]):
+                    bi[i][1] = grp
+                    bi[i][4] = round(val, 2)
+                    if i + 1 < n:
+                        bi[i + 1][0] = grp
+                        bi[i + 1][3] = round(val, 2)
+        else:
+            best = max(range(lo, hi + 1), key=lambda k: bars[k]["h"])
+            val = bars[best]["h"]
+            if val > ep + tol:
+                grp = _bar_to_grp(seq, best)
+                if grp - s >= MIN_GAP and (i + 1 >= n or grp < bi[i + 1][1]):
+                    bi[i][1] = grp
+                    bi[i][4] = round(val, 2)
+                    if i + 1 < n:
+                        bi[i + 1][0] = grp
+                        bi[i + 1][3] = round(val, 2)
+    return bi
+
+
 # ---------------------------------------------------------------- 中枢
 def build_zhongshu(bi):
     """连续三笔重叠成中枢，延伸后再按连接段排除确定下一中枢起始笔。"""
@@ -240,20 +295,44 @@ def detect_signals(bi, zs):
                     signals.append({"type": "3卖", "price": round(bi[j][4], 2), "bi": j,
                                     "about": f"跌破中枢{zi}下沿{zd:.2f}后反抽不破，高点{bi[j][4]:.2f}仍在下沿下方"})
                 break
-    # 一买/二买：区间最低点与次低点（结构近似）
-    lows = [(b[4] if b[4] < b[3] else b[3]) for b in bi]
-    prices = [min(b[3], b[4]) for b in bi]
+    # 一买/二买：区间最低点与次低点（结构近似）。
+    # 排除最后一笔：它是当前进行中/最近的一笔，端点未经后续走势确认，
+    # 若把"下跌未走完的瞬低点"标成 1 买会误导（可能继续创新低）。
+    done = bi[:-1]
+    prices = [min(b[3], b[4]) for b in done]
     if prices:
         min_p = min(prices)
         min_i = prices.index(min_p)
-        signals.append({"type": "1买", "price": min_p, "bi": min_i,
-                        "about": f"区间最低点{min_p:.2f}(结构近似，下跌背驰后的阶段低点)"})
-        # 二买：一买之后向下笔不创新低
-        for i in range(min_i + 1, len(bi)):
-            if bi[i][2] == "down" and min(bi[i][3], bi[i][4]) > min_p and min(bi[i][3], bi[i][4]) < max(bi[min_i][3], bi[min_i][4]):
-                signals.append({"type": "2买", "price": round(min(bi[i][3], bi[i][4]), 2),
-                                "bi": i, "about": f"一买后回调未创新低，次低点{min(bi[i][3],bi[i][4]):.2f}"})
+        # 一旦区间内已出现更低价格（通常落在未确认的末笔上），该"最低点"即被破坏：
+        # 一买只作为历史结构痕迹保留，降级标注为失效，不再当有效买点。
+        global_min = min(min(b[3], b[4]) for b in bi)
+        broken = global_min < min_p - 1e-9
+        signals.append({"type": "1买", "status": "broken" if broken else "normal",
+                        "price": min_p, "bi": min_i,
+                        "about": (f"潜在一买(已完成笔最低点{min_p:.2f})，但已被后创新低 {global_min:.2f} 破坏，仅历史结构痕迹、不作有效买点"
+                                  if broken else
+                                  f"已完成笔中的最低点{min_p:.2f}(结构近似，下跌背驰后的阶段低点)")})
+        # 二买：一买之后向下笔不创新低（同样只限已完成笔）；一买若已破坏则一并降级失效
+        for i in range(min_i + 1, len(done)):
+            if done[i][2] == "down" and min(done[i][3], done[i][4]) > min_p and min(done[i][3], done[i][4]) < max(done[min_i][3], done[min_i][4]):
+                signals.append({"type": "2买", "status": "broken" if broken else "normal",
+                                "price": round(min(done[i][3], done[i][4]), 2),
+                                "bi": i, "about": (f"回调低点{min(done[i][3],done[i][4]):.2f}本可为二买，但因一买已被 {global_min:.2f} 创新低破坏而失效"
+                                                   if broken else
+                                                   f"一买后回调未创新低，次低点{min(done[i][3],done[i][4]):.2f}")})
                 break
+    # 中枢上沿遇阻（减仓）：向上笔触及中枢上沿ZG却未能有效脱离，随即受压回落。
+    # 该类笔未创新高、未确认离开中枢（否则为三买/离开段），只标"上沿压力/减仓"。
+    for z in zs:
+        zg, zd = z[2], z[3]
+        tol = max(0.1 * (zg - zd), 1e-9)
+        for i in range(z[0], len(bi)):
+            b = bi[i]
+            if b[2] == "up" and zg - 1e-9 <= b[4] <= zg + tol:
+                if i + 1 < len(bi) and bi[i + 1][2] == "down":
+                    signals.append({"type": "减仓", "status": "resistance", "price": round(b[4], 2), "bi": i,
+                                    "about": f"反弹触及中枢上沿ZG={zg:.2f}遇阻回落，中枢上沿压力/减仓点"})
+                    break  # 每中枢只标第一个触上沿的向上笔
     return signals
 
 
@@ -468,6 +547,7 @@ def analyze(bars):
     fractals = find_fractals(seq)
     bi = build_bi(seq, fractals)
     bi = correct_interior_extreme(seq, fractals, bi)
+    bi = fit_extreme_to_kline(bars, seq, bi)
     zs = build_zhongshu(bi)
     signals = detect_signals(bi, zs)
     hist = compute_macd(bars)

@@ -26,6 +26,17 @@
     ];
   });
 
+  // 每根笔的编号：沿时间序放在笔起点的中价处，向上笔写在下方、向下笔写在上方，
+  // 让报告文字里的"笔N"能与图上笔段一一对应（对不熟悉缠论的读者友好）。
+  // 用独立 scatter 系列(symbolSize=0)承载纯文字标签，比 markPoint 更稳定。
+  var biLabels = biPoints.map(function(p, i) {
+    var up = p.dir === 'up';
+    return {
+      value: [p.s_idx, Math.round((p.sp + p.ep) * 100) / 200],
+      label: {formatter: '笔' + i, position: up ? 'bottom' : 'top'}
+    };
+  });
+
   var zsKeyPoints = [];
   zsMarks.forEach(function(z) {
     var fb = z.first_bi;
@@ -72,18 +83,26 @@
   });
 
   // 买卖点：买(3买/1买/2买)在笔终点下方、卖(3卖)在笔终点上方标注
+  // status: normal=常规买卖点, broken=已被后创新低破坏的一/二买(灰弱), resistance=中枢上沿遇阻减仓(灰)
   var sigPoints = {"__SIGPOINTS__"};
   var sigMarks = sigPoints.map(function(s) {
     var isBuy = s.buy;
+    var broken = s.status === 'broken';
+    var resistance = s.status === 'resistance';
+    var color = broken || resistance ? muted : (isBuy ? accent : accent2);
+    var sym = resistance ? 'diamond' : (broken ? 'circle' : (isBuy ? 'pin' : 'triangle'));
+    var pos = broken ? (isBuy ? 'bottom' : 'top') : (isBuy ? 'bottom' : 'top');
+    var size = broken ? 10 : (resistance ? 12 : (isBuy ? 16 : 14));
+    var tag = broken ? (s.type + '(失效)') : ('减仓' === s.type ? '减仓' : s.type);
     return {
       coord: [s.idx, s.price],
-      value: s.type + ' ' + s.price.toFixed(2),
-      itemStyle: {color: isBuy ? accent : accent2, borderColor: '#fff', borderWidth: 1},
-      symbol: isBuy ? 'pin' : 'triangle', symbolSize: isBuy ? 16 : 14,
-      label: {show: true, position: isBuy ? 'bottom' : 'top',
-              color: isBuy ? accent : accent2, fontSize: 11, fontWeight: 700,
+      value: tag + ' ' + s.price.toFixed(2),
+      itemStyle: {color: color, borderColor: '#fff', borderWidth: 1, opacity: broken ? 0.75 : 1},
+      symbol: sym, symbolSize: size,
+      label: {show: true, position: pos,
+              color: color, fontSize: broken ? 10 : 11, fontWeight: broken ? 400 : 700,
               backgroundColor: 'rgba(13,17,23,0.85)', padding: [2,4], borderRadius: 3,
-              formatter: s.type + ' ' + s.price.toFixed(2)}
+              formatter: tag + ' ' + s.price.toFixed(2)}
     };
   });
 
@@ -157,6 +176,14 @@
       {
         name: '笔', type: 'lines', coordinateSystem: 'cartesian2d', polyline: false,
         lineStyle: {color: ink, width: 1.5}, data: biLines, symbol: ['none', 'none'], z: 10
+      },
+      {
+        name: '笔编号', type: 'scatter', silent: true, z: 5,
+        symbol: 'circle', symbolSize: 4,
+        data: biLabels,
+        itemStyle: {color: ink, opacity: 0.28},
+        label: {show: true, fontSize: 9, fontWeight: 600, color: ink, distance: 5,
+                backgroundColor: 'rgba(13,17,23,0.7)', padding: [1, 3], borderRadius: 3}
       },
       {
         name: 'MACD', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: macdBars,
